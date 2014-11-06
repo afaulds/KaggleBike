@@ -1,0 +1,108 @@
+Clean <- function(data)
+{
+	datetime <- as.POSIXct(data$datetime)
+	data$hour <- as.numeric(strftime(datetime, "%H"))
+	data$month <- as.numeric(strftime(datetime, "%m"))
+	data$day.of.week <- as.numeric(strftime(datetime, "%w"))
+	data$day.of.year <- as.numeric(strftime(datetime, "%j"))
+
+	# Remove unnecessary fields
+	data$casual <- NULL
+	data$registered <- NULL
+	
+	return( data )
+}
+
+Train <- function(data)
+{
+	# Convert to number only matrix.
+	x <- data[, !(names(data) %in% c("datetime", "count"))]
+	y <- data[, names(data) == "count"]
+	x <- as.matrix(x)
+	y <- as.matrix(y)
+	
+	# Preprocess and normalize data.
+	object1 <- preProcess(x, method = c("center", "scale"))
+	x <- predict(object1, x)
+
+	# Train algorithm
+	object3 <- nnet(x, y, size = 20, maxit = 10000, linout = TRUE)
+	
+	return( list(object1 = object1, object3 = object3) )
+}
+
+Predict <- function(object, data)
+{
+	x <- data[, !(names(data) %in% c("datetime", "count"))]
+	x <- as.matrix(x)
+
+	x <- predict(object$object1, x)
+	
+	outcome <- predict(object$object3, x)
+	outcome[outcome < 0] <- 0
+	return( outcome )
+}
+
+Score <- function(object, data, name = "model")
+{
+	response <- Predict(object, data)
+	rms <- sqrt(sum((log(data$count + 1) - log(response + 1)) ^ 2) / length(response))
+
+	plot(response, data$count)
+	writeLines(sprintf("\n-----------------------%s-----------------------\n", name))
+	print(rms)
+	
+	return(response)
+}
+
+Write <- function(object, data)
+{
+	response <- Predict(object, data)
+	output <- data.frame(datetime = data$datetime, count = response)
+	write.csv(output, 'test_output.csv', row.names=FALSE)
+}
+
+Check <- function(object, data)
+{
+	newdata <- data
+	newdata$pcount <- Predict(object, newdata)
+	newdata$outlier <- (abs(data$count - newdata$pcount) / data$count) > 0.5
+	
+	newdata$color <- rep("", length(newdata$outlier))
+	newdata$color[newdata$outlier] <- "blue"
+	newdata$color[!newdata$outlier] <- "red"
+
+	plot(newdata$pcount, newdata$count, col = newdata$color)
+	
+	return(newdata)
+}
+
+library(caret)
+library(nnet)
+set.seed(521)
+
+fullTrainSet <- read.csv('train.csv', header=TRUE)
+fullTestSet <- read.csv('test.csv', header=TRUE)
+
+fullTrainSet <- Clean(fullTrainSet)
+fullTestSet <- Clean(fullTestSet)
+
+inTrain <- createDataPartition(fullTrainSet$count, p=0.7, list=FALSE)
+
+trainSet <- fullTrainSet[inTrain,]
+validateSet <- fullTrainSet[-inTrain,]
+
+# Train Data
+model <- Train(trainSet)
+
+# Check Training Accuracy
+Score(model, trainSet, "Training Set")
+
+# Check Testing Accuracy
+Score(model, validateSet, "Validation Set")
+
+trainNew <- Check(model, trainSet)
+
+# Check Validation Accuracy
+Write(model, fullTestSet)
+
